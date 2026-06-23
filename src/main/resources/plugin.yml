@@ -1,0 +1,13 @@
+name: TeamLocatorBar
+version: '0.1'
+main: one.yuqas.TeamLocatorBar
+api-version: '1.21'
+authors: [ 1Yuqas ]
+description: Dynamically changes Locator Bar colors based on each player's team relationships.
+folia-support: true
+depend: [ProtocolLib]
+
+commands:
+  teamlocatorbar:
+    description: TeamLocatorBar reload.
+    aliases: [tlb]
