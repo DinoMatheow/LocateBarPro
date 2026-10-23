@@ -27,7 +27,8 @@ public final class TeamLocatorBar extends JavaPlugin {
         boolean persistenceEnabled = getConfig().getBoolean("persistence.enabled", true);
         privacyService = new PlayerPrivacyService(this, getDataFolder().toPath(), persistenceEnabled);
         privacyService.reloadWorldRestriction();
-        teamManagementService = new TeamManagementService(this, privacyService);
+        teamManagementService = new TeamManagementService(this, privacyService, getDataFolder().toPath());
+        teamManagementService.loadAndReconcile();
         getServer().getPluginManager().registerEvents(privacyService, this);
         getServer().getPluginManager().registerEvents(teamManagementService, this);
         LocationBarListener listener = new LocationBarListener(this, privacyService);
@@ -58,6 +59,9 @@ public final class TeamLocatorBar extends JavaPlugin {
             autosaveTask.cancel();
         }
         if (privacyService != null) {
+            if (teamManagementService != null) {
+                teamManagementService.saveAtShutdown();
+            }
             privacyService.shutdownAndSave();
         }
     }

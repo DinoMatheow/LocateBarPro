@@ -22,6 +22,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -38,6 +40,10 @@ import static org.mockito.Mockito.when;
 class TeamManagementServiceTest {
 
     private static final String TEAM_PERMISSION = "teamlocatorbar.team";
+    private static final String ADMIN_PERMISSION = "teamlocatorbar.team.admin";
+
+    @TempDir
+    Path dataDirectory;
 
     @Test
     void createUsesPrefixedMainScoreboardTeamAndRejectsInvalidOrDuplicateNames() {
@@ -247,6 +253,92 @@ class TeamManagementServiceTest {
     }
 
     @Test
+    void leaderCanLeaveAfterTransferringLeadership() {
+        Fixture fixture = new Fixture(8);
+        Player leader = fixture.player("Leader");
+        Player member = fixture.player("Member");
+        fixture.execute(leader, "create", "Transfer");
+        fixture.execute(leader, "invite", "Member");
+        fixture.execute(member, "accept");
+
+        fixture.execute(leader, "leave");
+        assertEquals(fixture.teamFor(leader), fixture.teamFor(member));
+        fixture.execute(leader, "transfer", "Member");
+        fixture.execute(leader, "leave");
+
+        assertEquals(null, fixture.teamFor(leader));
+        assertEquals("Transfer", fixture.teamFor(member).getDisplayName());
+        fixture.execute(member, "invite", "Leader");
+        verify(fixture.privacy, times(4)).reevaluateAllVisibleMarkers();
+    }
+
+    @Test
+    void kickIsLeaderOnlyAndCanRemoveOnlyAnotherMemberOfTheOwnTeam() {
+        Fixture fixture = new Fixture(8);
+        Player leader = fixture.player("Leader");
+        Player member = fixture.player("Member");
+        Player outsider = fixture.player("Outsider");
+        fixture.execute(leader, "create", "Kick");
+        fixture.execute(leader, "invite", "Member");
+        fixture.execute(member, "accept");
+
+        fixture.execute(member, "kick", "Leader");
+        fixture.execute(leader, "kick", "Missing");
+        fixture.execute(leader, "kick", "Leader");
+        assertEquals(fixture.teamFor(leader), fixture.teamFor(member));
+        fixture.execute(leader, "kick", "Member");
+
+        assertEquals(null, fixture.teamFor(member));
+        verify(member).sendMessage(org.mockito.ArgumentMatchers.argThat((String message) ->
+                message.contains("removed from team")));
+        verify(fixture.privacy, times(3)).reevaluateAllVisibleMarkers();
+        fixture.execute(outsider, "kick", "Member");
+        assertEquals(null, fixture.teamFor(outsider));
+    }
+
+    @Test
+    void transferIsLeaderOnlyAndOnlyAcceptsAnotherMember() {
+        Fixture fixture = new Fixture(8);
+        Player leader = fixture.player("Leader");
+        Player member = fixture.player("Member");
+        Player outsider = fixture.player("Outsider");
+        fixture.execute(leader, "create", "Captain");
+        fixture.execute(leader, "invite", "Member");
+        fixture.execute(member, "accept");
+
+        fixture.execute(leader, "transfer", "Missing");
+        fixture.execute(leader, "transfer", "Leader");
+        fixture.execute(leader, "transfer", "Member");
+        fixture.execute(leader, "invite", "Outsider");
+
+        assertTrue(fixture.messages(leader).stream().anyMatch(message -> message.contains("Only your team's leader")));
+        fixture.execute(member, "invite", "Outsider");
+        assertTrue(fixture.messages(member).stream().anyMatch(message -> message.contains("Invited Outsider")));
+        verify(fixture.privacy, times(3)).reevaluateAllVisibleMarkers();
+    }
+
+    @Test
+    void onlyAdminsCanDisbandOtherManagedTeamsAndVanillaTeamsRemainUntouched() {
+        Fixture fixture = new Fixture(8);
+        Player owner = fixture.player("Owner");
+        Player normal = fixture.player("Normal");
+        Player admin = fixture.player("Admin");
+        Team vanilla = fixture.newTeam("admins", "AdminTeam");
+        fixture.execute(owner, "create", "Managed");
+        String managedInternalName = fixture.teamFor(owner).getName();
+        fixture.execute(normal, "disband", "Managed");
+        assertEquals(2, fixture.teams.size());
+
+        when(admin.hasPermission(ADMIN_PERMISSION)).thenReturn(true);
+        fixture.execute(admin, "disband", "AdminTeam");
+        assertEquals(vanilla, fixture.teams.get("admins"));
+        fixture.execute(admin, "disband", "mANAGED");
+        assertEquals(null, fixture.teams.get(managedInternalName));
+        assertTrue(fixture.messages(normal).stream().anyMatch(message -> message.contains("administratively")));
+        verify(fixture.privacy, times(2)).reevaluateAllVisibleMarkers();
+    }
+
+    @Test
     void disbandRemovesTeamAndInvitationsAndIsLeaderOnly() {
         Fixture fixture = new Fixture(8);
         Player leader = fixture.player("Leader");
@@ -306,13 +398,13 @@ class TeamManagementServiceTest {
         when(player.hasPermission(TEAM_PERMISSION)).thenReturn(false);
         for (String[] args : new String[][]{
                 {"create", "X"}, {"invite", "Someone"}, {"accept"}, {"deny"},
-                {"leave"}, {"disband"}, {"info"}, {"help"}
+                {"leave"}, {"disband"}, {"kick", "Someone"}, {"transfer", "Someone"}, {"info"}, {"help"}
         }) {
             fixture.execute(player, args);
         }
         assertTrue(fixture.teams.isEmpty());
         verify(fixture.privacy, never()).reevaluateAllVisibleMarkers();
-        verify(player, times(8)).sendMessage(org.mockito.ArgumentMatchers.argThat((String message) ->
+        verify(player, times(10)).sendMessage(org.mockito.ArgumentMatchers.argThat((String message) ->
                 message.contains("permission")));
 
         TeamCommand command = new TeamCommand(fixture.teamsService);
@@ -333,6 +425,101 @@ class TeamManagementServiceTest {
         TeamManagementService offThread = new TeamManagementService(
                 fixture.plugin, fixture.privacy, fixture.now::get, () -> false);
         assertThrows(IllegalStateException.class, () -> offThread.execute(leader, new String[]{"info"}));
+    }
+
+    @Test
+    void persistedLeaderIsRestoredAndMissingTeamsOrMembersBecomeLeaderless() {
+        Fixture fixture = new Fixture(8);
+        Player oldLeader = fixture.player("OldLeader");
+        Player savedLeader = fixture.player("SavedLeader");
+        Player outsider = fixture.player("Outsider");
+        Player orphanMember = fixture.player("OrphanMember");
+        fixture.execute(oldLeader, "create", "Persisted");
+        Team team = fixture.teamFor(oldLeader);
+        fixture.addEntry(team, savedLeader);
+        Team orphanedTeam = fixture.newTeam("tlb_left", "Orphaned");
+        fixture.addEntry(orphanedTeam, orphanMember);
+
+        TeamStatePersistence persistence = new TeamStatePersistence(dataDirectory, Logger.getLogger("team-persistence"));
+        assertTrue(persistence.save(Map.of(
+                team.getName(), new TeamStatePersistence.SavedTeam(savedLeader.getUniqueId(), "SavedLeader"),
+                "tlb_missing", new TeamStatePersistence.SavedTeam(UUID.randomUUID(), "Ghost"),
+                "tlb_left", new TeamStatePersistence.SavedTeam(UUID.randomUUID(), "MissingMember")
+        )));
+
+        PlayerPrivacyService actualPrivacy = new PlayerPrivacyService(fixture.plugin);
+        TeamStatePersistence.LoadResult loaded;
+        try {
+            TeamManagementService startupService = new TeamManagementService(
+                    fixture.plugin, actualPrivacy, persistence, fixture.now::get, () -> true);
+            startupService.loadAndReconcile();
+        } finally {
+            actualPrivacy.shutdownAndSave();
+        }
+
+        loaded = persistence.load();
+        TeamManagementService reloaded = new TeamManagementService(
+                fixture.plugin, fixture.privacy, persistence, fixture.now::get, () -> true);
+        reloaded.reconcileLoadedTeams(loaded);
+        try {
+            reloaded.execute(oldLeader, new String[]{"invite", "Outsider"});
+            assertTrue(fixture.messages(oldLeader).stream().anyMatch(message ->
+                    message.contains("Only your team's leader")));
+            reloaded.execute(savedLeader, new String[]{"invite", "Outsider"});
+            assertTrue(fixture.messages(savedLeader).stream().anyMatch(message ->
+                    message.contains("Invited Outsider")));
+            reloaded.execute(outsider, new String[]{"accept"});
+            assertEquals(team, fixture.teamFor(outsider));
+            reloaded.execute(outsider, new String[]{"info"});
+            assertTrue(fixture.messages(outsider).stream().anyMatch(message ->
+                    message.contains("SavedLeader")));
+            reloaded.execute(orphanMember, new String[]{"info"});
+            assertTrue(fixture.messages(orphanMember).stream().anyMatch(message ->
+                    message.contains("None (administrator closure required)")));
+            Player admin = fixture.player("Admin");
+            when(admin.hasPermission(ADMIN_PERMISSION)).thenReturn(true);
+            reloaded.execute(admin, new String[]{"disband", "Orphaned"});
+            assertEquals(null, fixture.teams.get("tlb_left"));
+        } finally {
+            reloaded.onPlayerQuit(fixture.quit(outsider));
+        }
+        assertEquals(Set.of(team.getName(), "tlb_left"), loaded.teams().keySet());
+    }
+
+    @Test
+    void offlineTransferredLeaderIsBoundToUuidWhenTheyJoin() {
+        Fixture fixture = new Fixture(8);
+        Player member = fixture.player("Member");
+        Player invitee = fixture.player("Invitee");
+        Team team = fixture.newTeam("tlb_offline", "Offline");
+        team.addEntry("FutureLeader");
+        fixture.addEntry(team, member);
+
+        TeamStatePersistence persistence = new TeamStatePersistence(dataDirectory, Logger.getLogger("team-persistence"));
+        assertTrue(persistence.save(Map.of(
+                "tlb_offline", new TeamStatePersistence.SavedTeam(null, "FutureLeader")
+        )));
+        PlayerPrivacyService actualPrivacy = new PlayerPrivacyService(fixture.plugin);
+        UUID futureLeaderId;
+        try {
+            TeamManagementService service = new TeamManagementService(
+                    fixture.plugin, actualPrivacy, persistence, fixture.now::get, () -> true);
+            service.loadAndReconcile();
+
+            Player futureLeader = fixture.player("FutureLeader");
+            futureLeaderId = futureLeader.getUniqueId();
+            org.bukkit.event.player.PlayerJoinEvent joinEvent =
+                    mock(org.bukkit.event.player.PlayerJoinEvent.class);
+            when(joinEvent.getPlayer()).thenReturn(futureLeader);
+            service.onPlayerJoin(joinEvent);
+            service.execute(futureLeader, new String[]{"invite", "Invitee"});
+
+            assertTrue(fixture.messages(futureLeader).stream().anyMatch(message ->
+                    message.contains("Invited Invitee")));
+        } finally {
+            actualPrivacy.shutdownAndSave();
+        }
+        assertEquals(futureLeaderId, persistence.load().teams().get("tlb_offline").leaderId());
     }
 
     private final class Fixture {

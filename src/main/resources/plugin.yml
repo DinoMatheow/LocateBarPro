@@ -26,6 +26,9 @@ permissions:
   teamlocatorbar.team:
     description: Allows players to create and manage their own scoreboard teams.
     default: true
+  teamlocatorbar.team.admin:
+    description: Allows administratively disbanding any plugin-managed team.
+    default: op
   teamlocatorbar.reload:
     description: Allows reloading the TeamLocatorBar configuration.
     default: op

@@ -50,9 +50,10 @@ Record each outcome in [TEST-REPORT.md](./TEST-REPORT.md).
    with each player visible on the server's Locator Bar. Note the time between an action
    and any marker change; the recurring reconciliation interval is 20 ticks.
 
-## Player-managed teams (phase 7A)
+## Player-managed teams
 
-Use at least three connected player accounts with `teamlocatorbar.team` (default true).
+Use at least three connected player accounts with `teamlocatorbar.team` (default true)
+and an operator account with `teamlocatorbar.team.admin` (default op).
 The plugin does not register or replace vanilla `/team`. Test these commands through both
 `/locator team ...` and the `/lteam ...` alias:
 
@@ -63,7 +64,9 @@ The plugin does not register or replace vanilla `/team`. Test these commands thr
 /locator team accept [name]
 /locator team deny [name]
 /locator team leave
-/locator team disband
+/locator team kick <player>
+/locator team transfer <player>
+/locator team disband [team]
 /locator team info
 ```
 
@@ -93,15 +96,20 @@ passing automated tests.
   Confirm an invitation expires after `teams.invite-timeout-seconds`; disconnect the
   invitee and separately the inviting leader and confirm their pending invitations are
   removed. Confirm team membership itself remains after a member disconnects/rejoins.
-- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Leave, disband, and info:** Confirm
-  a member can leave, a leader with other members cannot leave, a sole leader's leave
-  closes the team, and only the leader can disband. Confirm disband removes the team and
-  its pending invitations. Check `info` only reveals the executing player's own team,
-  leader, and members.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Leave, kick, transfer, disband,
+  and info:** Confirm a member can leave, a leader with other members must transfer
+  leadership before leaving, and a sole leader's leave closes the team. Confirm a leader
+  can kick another member but cannot kick themself, an outsider, or a member of another
+  team. Transfer leadership to a member and confirm only the new leader has leader
+  controls; then confirm the former leader can leave. Only a leader can disband their own
+  team. Check `info` only reveals the executing player's own team, leader, and members.
 - [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Permissions and console:** Deny
   `teamlocatorbar.team` and try every subcommand, including help, through both command
   paths. Confirm the command is refused. Try `/locator team help` and `/lteam help`
-  from console and confirm both are player-only.
+  from console and confirm both are player-only. Without `teamlocatorbar.team.admin`,
+  try `/locator team disband <team>` against another managed team; then grant the admin
+  permission and confirm it works. Confirm neither ordinary players nor the admin
+  command can disband a vanilla team.
 - [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Immediate privacy reevaluation:**
   Keep relevant markers visible and change membership through create, accept, member
   leave, leader leave-as-sole-member, and disband. Check that the existing privacy
@@ -112,9 +120,24 @@ passing automated tests.
   and confirm new invites/acceptances use the updated values. Existing invitation
   deadlines are not extended or shortened by reload.
 - [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Leader restart limitation:** Stop
-  and restart the disposable server. Confirm Minecraft retains scoreboard membership,
-  and note that the phase 7A in-memory leader assignment is lost. Leader persistence is
-  intentionally deferred to phase 7B.
+  and restart the disposable server. Confirm Minecraft retains scoreboard membership
+  and `teams.yml` restores the same leader. Inspect the file and confirm it contains a
+  schema version and leader UUID/name but no member list. Confirm a transferred leader
+  who was offline during transfer is recognized after joining with that member name.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Startup reconciliation:** In a
+  disposable copy, remove a team from the scoreboard but leave its teams.yml entry;
+  restart and confirm the stale entry is ignored. Then leave a managed scoreboard team
+  whose saved leader is no longer a member. Confirm no member is promoted, `info` reports
+  no leader, leader-only actions are unavailable, and an operator can close it with
+  `/locator team disband <team>`.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Corrupt/future team data:** Back
+  up teams.yml, replace it with malformed YAML (and separately an invalid team entry),
+  restart, and verify it is moved to a unique `.corrupt` file. Test a schema version
+  greater than the supported version and confirm the original file remains untouched.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Immediate changes:** With markers
+  visible, check client behavior after kick, transfer, and administrative disband.
+  Operations call the existing immediate privacy reevaluation, but visual removal is
+  not verified by automated tests.
 
 ## Checklist
 

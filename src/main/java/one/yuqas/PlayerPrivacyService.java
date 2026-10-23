@@ -17,6 +17,7 @@ import org.bukkit.entity.Player;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CompletableFuture;
@@ -51,13 +52,11 @@ public final class PlayerPrivacyService implements Listener {
                 ? new PlayerPreferencePersistence(dataFolder, plugin.getLogger())
                 : null;
         this.preferences = new PlayerPreferenceStore(persistence);
-        this.persistenceExecutor = persistenceEnabled
-                ? Executors.newSingleThreadExecutor(task -> {
-                    Thread thread = new Thread(task, "TeamLocatorBar-preferences");
-                    thread.setDaemon(true);
-                    return thread;
-                })
-                : null;
+        this.persistenceExecutor = Executors.newSingleThreadExecutor(task -> {
+            Thread thread = new Thread(task, "TeamLocatorBar-persistence");
+            thread.setDaemon(true);
+            return thread;
+        });
         this.teamResolver = new ScoreboardTeamResolver(plugin);
     }
 
@@ -203,6 +202,38 @@ public final class PlayerPrivacyService implements Listener {
         return persistenceEnabled;
     }
 
+    public <T> T runPersistenceTask(Callable<T> task, String failureMessage) {
+        Future<T> queued;
+        try {
+            queued = persistenceExecutor.submit(task);
+        } catch (java.util.concurrent.RejectedExecutionException exception) {
+            plugin.getLogger().log(Level.WARNING, failureMessage, exception);
+            throw new IllegalStateException(failureMessage, exception);
+        }
+
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    return queued.get();
+                } catch (InterruptedException exception) {
+                    interrupted = true;
+                } catch (ExecutionException exception) {
+                    plugin.getLogger().log(Level.WARNING, failureMessage, exception.getCause());
+                    throw new IllegalStateException(failureMessage, exception.getCause());
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    public void submitPersistenceTask(Runnable task, String failureMessage) {
+        submitPersistence(task, failureMessage);
+    }
+
     public void releasePlayer(UUID playerId) {
         pendingPreLogins.remove(playerId);
         visibleTransmitters.forEach((receiverId, transmitters) -> {
@@ -233,13 +264,10 @@ public final class PlayerPrivacyService implements Listener {
     }
 
     public void shutdownAndSave() {
-        if (!persistenceEnabled) {
-            return;
-        }
         persistenceExecutor.shutdown();
         try {
             if (!persistenceExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                plugin.getLogger().warning("Preference writes did not finish before shutdown; performing final save.");
+                plugin.getLogger().warning("Persistence tasks did not finish before shutdown.");
                 persistenceExecutor.shutdownNow();
                 persistenceExecutor.awaitTermination(5, TimeUnit.SECONDS);
             }
@@ -247,7 +275,9 @@ public final class PlayerPrivacyService implements Listener {
             Thread.currentThread().interrupt();
             persistenceExecutor.shutdownNow();
         }
-        preferences.saveAll();
+        if (persistenceEnabled) {
+            preferences.saveAll();
+        }
     }
 
     public boolean canSee(Player transmitter, Player receiver) {

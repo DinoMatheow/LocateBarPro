@@ -6,13 +6,13 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -30,15 +30,26 @@ public final class TeamManagementService implements Listener {
 
     private final TeamLocatorBar plugin;
     private final PlayerPrivacyService privacyService;
+    private final TeamStatePersistence persistence;
     private final LongSupplier nanoTime;
     private final BooleanSupplier primaryThread;
     private final Map<String, TeamState> teamStates = new HashMap<>();
     private final Map<UUID, Map<String, Invitation>> invitations = new HashMap<>();
     private int maxMembers = 8;
     private int inviteTimeoutSeconds = 60;
+    private boolean persistenceWritable = true;
 
     public TeamManagementService(TeamLocatorBar plugin, PlayerPrivacyService privacyService) {
-        this(plugin, privacyService, System::nanoTime, Bukkit::isPrimaryThread);
+        this(plugin, privacyService, null, System::nanoTime, Bukkit::isPrimaryThread);
+    }
+
+    public TeamManagementService(
+            TeamLocatorBar plugin,
+            PlayerPrivacyService privacyService,
+            java.nio.file.Path dataDirectory
+    ) {
+        this(plugin, privacyService, new TeamStatePersistence(dataDirectory, plugin.getLogger()),
+                System::nanoTime, Bukkit::isPrimaryThread);
     }
 
     TeamManagementService(
@@ -47,8 +58,19 @@ public final class TeamManagementService implements Listener {
             LongSupplier nanoTime,
             BooleanSupplier primaryThread
     ) {
+        this(plugin, privacyService, null, nanoTime, primaryThread);
+    }
+
+    TeamManagementService(
+            TeamLocatorBar plugin,
+            PlayerPrivacyService privacyService,
+            TeamStatePersistence persistence,
+            LongSupplier nanoTime,
+            BooleanSupplier primaryThread
+    ) {
         this.plugin = plugin;
         this.privacyService = privacyService;
+        this.persistence = persistence;
         this.nanoTime = nanoTime;
         this.primaryThread = primaryThread;
         reloadSettings();
@@ -78,6 +100,41 @@ public final class TeamManagementService implements Listener {
         }
     }
 
+    public void loadAndReconcile() {
+        requirePrimaryThread();
+        TeamStatePersistence.LoadResult loaded = persistence == null
+                ? new TeamStatePersistence.LoadResult(Map.of(), true)
+                : privacyService.runPersistenceTask(persistence::load, "Could not load team leadership data.");
+        reconcileLoadedTeams(loaded);
+    }
+
+    void reconcileLoadedTeams(TeamStatePersistence.LoadResult loaded) {
+        requirePrimaryThread();
+        persistenceWritable = loaded.writable();
+        teamStates.clear();
+        Scoreboard scoreboard = mainScoreboard();
+        for (Team team : scoreboard.getTeams()) {
+            if (!isPluginTeam(team)) {
+                continue;
+            }
+            TeamStatePersistence.SavedTeam saved = loaded.teams().get(team.getName());
+            UUID leaderId = null;
+            String leaderName = null;
+            if (saved != null && saved.leaderName() != null && team.getEntries().contains(saved.leaderName())) {
+                Player onlineLeader = plugin.getServer().getPlayerExact(saved.leaderName());
+                if (saved.leaderId() == null) {
+                    leaderId = onlineLeader == null ? null : onlineLeader.getUniqueId();
+                    leaderName = saved.leaderName();
+                } else if (onlineLeader == null || onlineLeader.getUniqueId().equals(saved.leaderId())) {
+                    leaderId = saved.leaderId();
+                    leaderName = saved.leaderName();
+                }
+            }
+            teamStates.put(team.getName(), new TeamState(leaderId, leaderName, team.getDisplayName()));
+        }
+        saveStateAsync();
+    }
+
     public void execute(Player player, String[] args) {
         requirePrimaryThread();
         if (!player.hasPermission(PERMISSION)) {
@@ -97,6 +154,8 @@ public final class TeamManagementService implements Listener {
             case "deny" -> deny(player, args);
             case "leave" -> leave(player, args);
             case "disband" -> disband(player, args);
+            case "kick" -> kick(player, args);
+            case "transfer" -> transfer(player, args);
             case "info" -> info(player, args);
             case "help" -> {
                 if (args.length != 1) {
@@ -106,6 +165,19 @@ public final class TeamManagementService implements Listener {
                 }
             }
             default -> usage(player);
+        }
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        requirePrimaryThread();
+        Player player = event.getPlayer();
+        Team team = mainScoreboard().getEntryTeam(player.getName());
+        TeamState state = team == null ? null : teamStates.get(team.getName());
+        if (state != null && state.leaderId() == null
+                && player.getName().equalsIgnoreCase(state.leaderName())) {
+            teamStates.put(team.getName(), new TeamState(player.getUniqueId(), player.getName(), state.visibleName()));
+            saveStateAsync();
         }
     }
 
@@ -143,6 +215,7 @@ public final class TeamManagementService implements Listener {
         team.setDisplayName(visibleName);
         team.addEntry(player.getName());
         teamStates.put(internalName, new TeamState(player.getUniqueId(), player.getName(), visibleName));
+        saveStateAsync();
         privacyService.reevaluateAllVisibleMarkers();
         player.sendMessage(PREFIX + "Created team " + visibleName + ". You are its leader.");
     }
@@ -156,7 +229,7 @@ public final class TeamManagementService implements Listener {
         Scoreboard scoreboard = mainScoreboard();
         Team team = scoreboard.getEntryTeam(player.getName());
         TeamState state = team == null ? null : teamStates.get(team.getName());
-        if (state == null || !state.leaderId().equals(player.getUniqueId())) {
+        if (!isLeader(state, player)) {
             player.sendMessage(PREFIX + "Only your team's leader can invite players.");
             return;
         }
@@ -241,7 +314,8 @@ public final class TeamManagementService implements Listener {
             return;
         }
         TeamState state = teamStates.get(team.getName());
-        if (state == null || !team.getEntries().contains(state.leaderName())) {
+        if (state == null || state.leaderId() == null || state.leaderName() == null
+                || !team.getEntries().contains(state.leaderName())) {
             removeInvitation(invitation);
             player.sendMessage(PREFIX + "That team's leadership is no longer available.");
             return;
@@ -261,7 +335,7 @@ public final class TeamManagementService implements Listener {
         removeInvitation(invitation);
         privacyService.reevaluateAllVisibleMarkers();
         player.sendMessage(PREFIX + "You joined team " + state.visibleName() + ".");
-        Player leader = plugin.getServer().getPlayer(state.leaderId());
+        Player leader = state.leaderId() == null ? null : plugin.getServer().getPlayer(state.leaderId());
         if (leader != null && leader.isOnline()) {
             leader.sendMessage(PREFIX + player.getName() + " joined your team.");
         }
@@ -299,13 +373,13 @@ public final class TeamManagementService implements Listener {
             player.sendMessage(PREFIX + "You are not a member of a managed team.");
             return;
         }
-        if (state.leaderId().equals(player.getUniqueId())) {
-            if (team.getEntries().size() > 1) {
-                player.sendMessage(PREFIX + "As leader, you cannot leave while members remain. Use /locator team disband.");
-                return;
-            }
+        if (isLeader(state, player) && team.getEntries().size() == 1) {
             closeTeam(team);
             player.sendMessage(PREFIX + "Your team " + state.visibleName() + " has been closed.");
+            return;
+        }
+        if (isLeader(state, player)) {
+            player.sendMessage(PREFIX + "Transfer leadership before leaving your team.");
             return;
         }
 
@@ -315,6 +389,10 @@ public final class TeamManagementService implements Listener {
     }
 
     private void disband(Player player, String[] args) {
+        if (args.length == 2) {
+            disbandAsAdministrator(player, args[1]);
+            return;
+        }
         if (args.length != 1) {
             player.sendMessage(PREFIX + "Usage: /locator team disband");
             return;
@@ -322,13 +400,99 @@ public final class TeamManagementService implements Listener {
         Scoreboard scoreboard = mainScoreboard();
         Team team = scoreboard.getEntryTeam(player.getName());
         TeamState state = team == null ? null : teamStates.get(team.getName());
-        if (state == null || !state.leaderId().equals(player.getUniqueId())) {
+        if (!isLeader(state, player)) {
             player.sendMessage(PREFIX + "Only your team's leader can disband it.");
             return;
         }
         String visibleName = state.visibleName();
         closeTeam(team);
         player.sendMessage(PREFIX + "Team " + visibleName + " was disbanded.");
+    }
+
+    private void disbandAsAdministrator(Player player, String teamName) {
+        if (!player.hasPermission("teamlocatorbar.team.admin")) {
+            player.sendMessage("§cYou do not have permission to administratively disband teams.");
+            return;
+        }
+        Team team = findPluginTeam(mainScoreboard(), teamName);
+        if (team == null || !teamStates.containsKey(team.getName())) {
+            player.sendMessage(PREFIX + "No managed team with that name exists.");
+            return;
+        }
+        String visibleName = team.getDisplayName();
+        closeTeam(team);
+        player.sendMessage(PREFIX + "Managed team " + visibleName + " was administratively disbanded.");
+    }
+
+    private void kick(Player player, String[] args) {
+        if (args.length != 2) {
+            player.sendMessage(PREFIX + "Usage: /locator team kick <player>");
+            return;
+        }
+        Scoreboard scoreboard = mainScoreboard();
+        Team team = scoreboard.getEntryTeam(player.getName());
+        TeamState state = team == null ? null : teamStates.get(team.getName());
+        if (!isLeader(state, player)) {
+            player.sendMessage(PREFIX + "Only your team's leader can remove members.");
+            return;
+        }
+        String memberName = team.getEntries().stream()
+                .filter(entry -> entry.equalsIgnoreCase(args[1]))
+                .findFirst()
+                .orElse(null);
+        if (memberName == null) {
+            player.sendMessage(PREFIX + "That player is not a member of your team.");
+            return;
+        }
+        if (memberName.equalsIgnoreCase(player.getName())) {
+            player.sendMessage(PREFIX + "You cannot remove yourself. Transfer leadership or disband the team.");
+            return;
+        }
+
+        team.removeEntry(memberName);
+        Player removed = plugin.getServer().getPlayerExact(memberName);
+        if (removed != null) {
+            removed.sendMessage(PREFIX + "You were removed from team " + state.visibleName() + ".");
+        }
+        player.sendMessage(PREFIX + "Removed " + memberName + " from team " + state.visibleName() + ".");
+        privacyService.reevaluateAllVisibleMarkers();
+    }
+
+    private void transfer(Player player, String[] args) {
+        if (args.length != 2) {
+            player.sendMessage(PREFIX + "Usage: /locator team transfer <player>");
+            return;
+        }
+        Scoreboard scoreboard = mainScoreboard();
+        Team team = scoreboard.getEntryTeam(player.getName());
+        TeamState state = team == null ? null : teamStates.get(team.getName());
+        if (!isLeader(state, player)) {
+            player.sendMessage(PREFIX + "Only your team's leader can transfer leadership.");
+            return;
+        }
+        String memberName = team.getEntries().stream()
+                .filter(entry -> entry.equalsIgnoreCase(args[1]))
+                .findFirst()
+                .orElse(null);
+        if (memberName == null) {
+            player.sendMessage(PREFIX + "Leadership can only be transferred to a member of your team.");
+            return;
+        }
+        if (memberName.equalsIgnoreCase(player.getName())) {
+            player.sendMessage(PREFIX + "You are already the leader.");
+            return;
+        }
+
+        Player newLeader = plugin.getServer().getPlayerExact(memberName);
+        teamStates.put(team.getName(), new TeamState(
+                newLeader == null ? null : newLeader.getUniqueId(), memberName, state.visibleName()));
+        saveStateAsync();
+        privacyService.reevaluateAllVisibleMarkers();
+        player.sendMessage(PREFIX + "Leadership of " + state.visibleName() + " was transferred to "
+                + memberName + ".");
+        if (newLeader != null) {
+            newLeader.sendMessage(PREFIX + "You are now the leader of " + state.visibleName() + ".");
+        }
     }
 
     private void info(Player player, String[] args) {
@@ -343,7 +507,8 @@ public final class TeamManagementService implements Listener {
             return;
         }
         player.sendMessage("§6Team: §f" + state.visibleName());
-        player.sendMessage("§6Leader: §f" + state.leaderName());
+        player.sendMessage("§6Leader: §f"
+                + (state.leaderName() == null ? "None (administrator closure required)" : state.leaderName()));
         player.sendMessage("§6Members (" + team.getEntries().size() + "/" + maxMembers + "): §f"
                 + String.join(", ", team.getEntries().stream().sorted(String.CASE_INSENSITIVE_ORDER).toList()));
     }
@@ -416,6 +581,7 @@ public final class TeamManagementService implements Listener {
         teamStates.remove(teamName);
         team.unregister();
         privacyService.reevaluateAllVisibleMarkers();
+        saveStateAsync();
     }
 
     private Team findPluginTeam(Scoreboard scoreboard, String visibleName) {
@@ -462,10 +628,54 @@ public final class TeamManagementService implements Listener {
         player.sendMessage("§f/locator team accept [name] §7- Accept a pending invitation.");
         player.sendMessage("§f/locator team deny [name] §7- Reject a pending invitation.");
         player.sendMessage("§f/locator team leave §7- Leave your team.");
-        player.sendMessage("§f/locator team disband §7- Close your team (leader only).");
+        player.sendMessage("§f/locator team kick <player> §7- Remove a member (leader only).");
+        player.sendMessage("§f/locator team transfer <player> §7- Transfer leadership to a member.");
+        player.sendMessage("§f/locator team disband [team] §7- Close your team or, with admin permission, a managed team.");
         player.sendMessage("§f/locator team info §7- Show your own team.");
         player.sendMessage("§f/locator team help §7- Show this help.");
         player.sendMessage("§7Alias: /lteam <subcommand>");
+    }
+
+    public void saveAtShutdown() {
+        if (persistence == null || !persistenceWritable) {
+            return;
+        }
+        Map<String, TeamStatePersistence.SavedTeam> snapshot = snapshotState();
+        boolean saved = privacyService.runPersistenceTask(
+                () -> persistence.save(snapshot), "Could not save team leadership data at shutdown.");
+        if (!saved) {
+            plugin.getLogger().warning("Team leadership data could not be saved before shutdown.");
+        }
+    }
+
+    private void saveStateAsync() {
+        if (persistence == null || !persistenceWritable) {
+            return;
+        }
+        Map<String, TeamStatePersistence.SavedTeam> snapshot = snapshotState();
+        privacyService.submitPersistenceTask(
+                () -> persistence.save(snapshot),
+                "Could not save team leadership data.");
+    }
+
+    private Map<String, TeamStatePersistence.SavedTeam> snapshotState() {
+        Map<String, TeamStatePersistence.SavedTeam> snapshot = new LinkedHashMap<>();
+        Scoreboard scoreboard = mainScoreboard();
+        for (Map.Entry<String, TeamState> entry : teamStates.entrySet()) {
+            Team team = scoreboard.getTeam(entry.getKey());
+            if (team == null || !isPluginTeam(team)) {
+                continue;
+            }
+            TeamState state = entry.getValue();
+            snapshot.put(entry.getKey(),
+                    new TeamStatePersistence.SavedTeam(state.leaderId(), state.leaderName()));
+        }
+        return Map.copyOf(snapshot);
+    }
+
+    private boolean isLeader(TeamState state, Player player) {
+        return state != null && state.leaderId() != null
+                && state.leaderId().equals(player.getUniqueId());
     }
 
     private void usage(Player player) {
