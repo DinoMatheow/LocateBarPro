@@ -8,6 +8,11 @@ persistence:
   # Periodically save connected players' preferences; set to 0 to disable autosave.
   autosave-minutes: 5
 
+# Player-managed teams use real teams on the main scoreboard.
+teams:
+  max-members: 8
+  invite-timeout-seconds: 60
+
 # Restrict Locator Bar tracking by world. Names are case-insensitive.
 # BLACKLIST allows every world except those listed. WHITELIST allows only listed worlds.
 worlds:

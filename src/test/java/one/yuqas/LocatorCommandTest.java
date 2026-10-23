@@ -132,6 +132,18 @@ class LocatorCommandTest {
     }
 
     @Test
+    void teamSubcommandsUseTheirOwnPermissionInsteadOfLocatorPreferencePermission() {
+        TeamCommand teamCommand = mock(TeamCommand.class);
+        LocatorCommand commandWithTeams = new LocatorCommand(privacyService, teamCommand);
+        when(player.hasPermission(LOCATOR_PERMISSION)).thenReturn(false);
+
+        commandWithTeams.onCommand(player, command, "locator", new String[]{"team", "help"});
+
+        verify(teamCommand).onCommand(player, command, "locator", new String[]{"help"});
+        verify(player, never()).sendMessage(messageContaining("permission"));
+    }
+
+    @Test
     void consoleCannotUsePersonalPreferencesOrSupplyAnotherPlayer() {
         CommandSender console = mock(CommandSender.class);
 

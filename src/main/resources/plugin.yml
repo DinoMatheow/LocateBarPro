@@ -11,7 +11,9 @@ commands:
   locator:
     description: Manage your Locator Bar privacy preferences.
     usage: /locator help
-    permission: teamlocatorbar.locator
+  lteam:
+    description: Manage your scoreboard team.
+    usage: /lteam help
   teamlocatorbar:
     description: TeamLocatorBar reload.
     aliases: [tlb]
@@ -20,6 +22,9 @@ commands:
 permissions:
   teamlocatorbar.locator:
     description: Allows players to manage their own Locator Bar preferences.
+    default: true
+  teamlocatorbar.team:
+    description: Allows players to create and manage their own scoreboard teams.
     default: true
   teamlocatorbar.reload:
     description: Allows reloading the TeamLocatorBar configuration.

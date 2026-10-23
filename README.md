@@ -17,6 +17,7 @@ MIT, conservando el aviso de copyright original y añadiendo el de DinoMatheow.
 - Comandos `/locator` y permisos personales y administrativos.
 - Persistencia de preferencias por UUID.
 - Restricciones de seguimiento por mundo.
+- Equipos de scoreboard administrados por jugadores, con líder e invitaciones.
 - Documentación de pruebas manuales.
 
 ## Locator Bar privacy defaults
@@ -44,6 +45,34 @@ Players manage only their own settings with `/locator`, `/locator on`, `/locator
 `/locator receive <off|team|public>`, `/locator status`, and `/locator help`. The `/teamlocatorbar` (alias `/tlb`)
 command remains the configuration reload command and requires `teamlocatorbar.reload` (default: operators).
 Personal preference commands require `teamlocatorbar.locator` (default: true).
+
+## Player-managed teams (phase 7A)
+
+Players can manage real teams on Minecraft's main scoreboard with `/locator team` or the short alias `/lteam`:
+
+- `/locator team create <name>` creates a team and makes its creator the leader.
+- `/locator team invite <player>` invites an online player; only the leader can invite.
+- `/locator team accept [name]` accepts an invitation. If several are pending, specify the team name.
+- `/locator team deny [name]` rejects an invitation; the connected leader is notified.
+- `/locator team leave` leaves as a member. A leader must disband while other members remain.
+- `/locator team disband` closes the leader's team and removes it from the main scoreboard.
+- `/locator team info` shows only the executing player's managed team, leader, and members.
+- `/locator team help` lists the team commands.
+
+`teamlocatorbar.team` (default: true) is required for every team subcommand. Team names are 1-16 ASCII letters,
+digits, underscores, or hyphens and are unique without regard to case. Teams use internal scoreboard names beginning
+with `tlb_`; a player already on a vanilla or administrator scoreboard team must leave that team before joining a
+managed team. Admin/vanilla teams are not listed or modified by these commands. The limits are configured using
+`teams.max-members` (default 8, including the leader) and `teams.invite-timeout-seconds` (default 60); those settings
+are reloaded by `/teamlocatorbar reload`.
+
+Team membership is stored by Minecraft on the main scoreboard, so it remains when members disconnect. The leader
+assignment and pending invitations exist only in memory in phase 7A: invitations are removed on expiry or when either
+party disconnects, and leader data is lost on server restart. Persistence of the leader is deferred to phase 7B.
+Each create, accept, leave, or disband membership change immediately asks the existing privacy service to reevaluate
+visible markers; this does not verify that a client applied a visual removal. Invitation chat messages include
+clickable accept/decline actions plus manual command alternatives, but the click behavior has not been verified in a
+live Minecraft client.
 
 Team membership is resolved from the same scoreboard when both players share one. If they have different scoreboards,
 the main server scoreboard is used as the common source; same-named teams on separate scoreboards are not treated as

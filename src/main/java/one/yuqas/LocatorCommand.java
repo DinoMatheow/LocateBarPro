@@ -14,9 +14,15 @@ public final class LocatorCommand implements CommandExecutor {
     private static final String PREFIX = "§a[Locator] §f";
 
     private final PlayerPrivacyService privacyService;
+    private final TeamCommand teamCommand;
 
     public LocatorCommand(PlayerPrivacyService privacyService) {
+        this(privacyService, null);
+    }
+
+    public LocatorCommand(PlayerPrivacyService privacyService, TeamCommand teamCommand) {
         this.privacyService = privacyService;
+        this.teamCommand = teamCommand;
     }
 
     @Override
@@ -26,6 +32,15 @@ public final class LocatorCommand implements CommandExecutor {
         }
         if (!(sender instanceof Player player)) {
             sender.sendMessage(PREFIX + "This command can only be used by a player.");
+            return true;
+        }
+        if (args.length > 0 && args[0].equalsIgnoreCase("team")) {
+            if (teamCommand == null) {
+                player.sendMessage(PREFIX + "Team management is unavailable.");
+            } else {
+                teamCommand.onCommand(player, command, label,
+                        java.util.Arrays.copyOfRange(args, 1, args.length));
+            }
             return true;
         }
         if (!player.hasPermission(PERMISSION)) {
@@ -135,7 +150,10 @@ public final class LocatorCommand implements CommandExecutor {
     }
 
     private VisibilityMode parseMode(String value, boolean allowOff) {
-        return switch (value.toLowerCase(Locale.ROOT)) {
+        if (value == null) {
+            return null;
+        }
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
             case "off" -> allowOff ? VisibilityMode.OFF : null;
             case "team" -> VisibilityMode.TEAM;
             case "public" -> VisibilityMode.PUBLIC;

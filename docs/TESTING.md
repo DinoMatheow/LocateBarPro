@@ -50,6 +50,72 @@ Record each outcome in [TEST-REPORT.md](./TEST-REPORT.md).
    with each player visible on the server's Locator Bar. Note the time between an action
    and any marker change; the recurring reconciliation interval is 20 ticks.
 
+## Player-managed teams (phase 7A)
+
+Use at least three connected player accounts with `teamlocatorbar.team` (default true).
+The plugin does not register or replace vanilla `/team`. Test these commands through both
+`/locator team ...` and the `/lteam ...` alias:
+
+```text
+/locator team help
+/locator team create <name>
+/locator team invite <player>
+/locator team accept [name]
+/locator team deny [name]
+/locator team leave
+/locator team disband
+/locator team info
+```
+
+In a disposable server, check the following. Record each outcome in the report; none of
+the clickable chat actions or client-visible marker removals are verified merely by
+passing automated tests.
+
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Create and names:** Create a valid
+  team; try empty/missing, over-16-character, spaced, and otherwise invalid names. Create
+  a second team using a case-only variant of an existing visible name and confirm it is
+  rejected.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **One team per player and vanilla
+  teams:** Confirm a player cannot create or accept into a second team. Put a player in
+  an administrator-created vanilla `/team`, then confirm plugin create/accept is refused
+  with a clear explanation and the existing team remains unchanged.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Invite and cap:** Confirm only the
+  leader can invite, offline players and self-invites are refused, duplicate invitations
+  are refused, already-teamed players cannot be invited, and a team at
+  `teams.max-members` cannot accept another member. Confirm the invitation shows
+  clickable accept/decline actions and manual command alternatives. Test the clicks in
+  the client and record the outcome; their behavior is not established by the build.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Accept and deny:** Accept the sole
+  pending invitation without a name. Create two pending invitations and verify a name is
+  required to select one, then accept using a case-insensitive name. Deny with and
+  without a name and confirm a connected leader is notified.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Invitation expiry and disconnect:**
+  Confirm an invitation expires after `teams.invite-timeout-seconds`; disconnect the
+  invitee and separately the inviting leader and confirm their pending invitations are
+  removed. Confirm team membership itself remains after a member disconnects/rejoins.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Leave, disband, and info:** Confirm
+  a member can leave, a leader with other members cannot leave, a sole leader's leave
+  closes the team, and only the leader can disband. Confirm disband removes the team and
+  its pending invitations. Check `info` only reveals the executing player's own team,
+  leader, and members.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Permissions and console:** Deny
+  `teamlocatorbar.team` and try every subcommand, including help, through both command
+  paths. Confirm the command is refused. Try `/locator team help` and `/lteam help`
+  from console and confirm both are player-only.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Immediate privacy reevaluation:**
+  Keep relevant markers visible and change membership through create, accept, member
+  leave, leader leave-as-sole-member, and disband. Check that the existing privacy
+  service is asked to reevaluate immediately and record whether marker removal is
+  actually visible in the client; visual removal is not verified by automated tests.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Configuration reload:** Change
+  `teams.max-members` and `teams.invite-timeout-seconds`, run `/teamlocatorbar reload`,
+  and confirm new invites/acceptances use the updated values. Existing invitation
+  deadlines are not extended or shortened by reload.
+- [ ] PASS / [ ] FAIL / [ ] BLOCKED / [ ] NOT RUN — **Leader restart limitation:** Stop
+  and restart the disposable server. Confirm Minecraft retains scoreboard membership,
+  and note that the phase 7A in-memory leader assignment is lost. Leader persistence is
+  intentionally deferred to phase 7B.
+
 ## Checklist
 
 For every case, mark exactly one result and add evidence/notes in the report:

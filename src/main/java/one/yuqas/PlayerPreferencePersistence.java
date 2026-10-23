@@ -118,9 +118,10 @@ public final class PlayerPreferencePersistence {
             UUID playerId,
             String field
     ) {
-        if (value != null) {
+        String trimmedValue = value == null ? null : value.trim();
+        if (trimmedValue != null) {
             try {
-                VisibilityMode mode = VisibilityMode.valueOf(value.toUpperCase(Locale.ROOT));
+                VisibilityMode mode = VisibilityMode.valueOf(trimmedValue.toUpperCase(Locale.ROOT));
                 if (allowOff || mode != VisibilityMode.OFF) {
                     return mode;
                 }

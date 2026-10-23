@@ -12,6 +12,7 @@ public final class TeamLocatorBar extends JavaPlugin {
     private static final String RELOAD_PERMISSION = "teamlocatorbar.reload";
 
     private PlayerPrivacyService privacyService;
+    private TeamManagementService teamManagementService;
     private VisibilityDebugLogger visibilityDebugLogger;
     private ScheduledTask autosaveTask;
 
@@ -26,7 +27,9 @@ public final class TeamLocatorBar extends JavaPlugin {
         boolean persistenceEnabled = getConfig().getBoolean("persistence.enabled", true);
         privacyService = new PlayerPrivacyService(this, getDataFolder().toPath(), persistenceEnabled);
         privacyService.reloadWorldRestriction();
+        teamManagementService = new TeamManagementService(this, privacyService);
         getServer().getPluginManager().registerEvents(privacyService, this);
+        getServer().getPluginManager().registerEvents(teamManagementService, this);
         LocationBarListener listener = new LocationBarListener(this, privacyService);
         getServer().getPluginManager().registerEvents(listener, this);
         getServer().getGlobalRegionScheduler().runAtFixedRate(
@@ -39,8 +42,12 @@ public final class TeamLocatorBar extends JavaPlugin {
         if (getCommand("teamlocatorbar") != null) {
             getCommand("teamlocatorbar").setExecutor(this);
         }
+        TeamCommand teamCommand = new TeamCommand(teamManagementService);
         if (getCommand("locator") != null) {
-            getCommand("locator").setExecutor(new LocatorCommand(privacyService));
+            getCommand("locator").setExecutor(new LocatorCommand(privacyService, teamCommand));
+        }
+        if (getCommand("lteam") != null) {
+            getCommand("lteam").setExecutor(teamCommand);
         }
         scheduleAutosave();
     }
@@ -72,6 +79,7 @@ public final class TeamLocatorBar extends JavaPlugin {
 
         reloadConfig();
         privacyService.reloadWorldRestriction();
+        teamManagementService.reloadSettings();
         privacyService.reevaluateAllVisibleMarkers();
         if (getConfig().getBoolean("persistence.enabled", true) != privacyService.isPersistenceEnabled()) {
             getLogger().warning("Changing persistence.enabled requires a server restart.");
