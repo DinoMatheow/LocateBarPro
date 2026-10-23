@@ -1,4 +1,9 @@
 .idea
+.vscode
+.settings
+.classpath
+.project
+*.iml
 .gradle
 build
 run

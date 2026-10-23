@@ -1,4 +1,18 @@
 enabled: true
+# Log rate-limited privacy decision categories without player identifiers.
+debug: false
+
+# Player preferences are stored separately by UUID.
+persistence:
+  enabled: true
+  # Periodically save connected players' preferences; set to 0 to disable autosave.
+  autosave-minutes: 5
+
+# Restrict Locator Bar tracking by world. Names are case-insensitive.
+# BLACKLIST allows every world except those listed. WHITELIST allows only listed worlds.
+worlds:
+  mode: BLACKLIST
+  list: []
 
 colors:
   teammate:

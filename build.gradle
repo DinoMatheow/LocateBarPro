@@ -1,7 +1,7 @@
 plugins {
     id 'java'
-    id("xyz.jpenilla.run-paper") version "2.3.1"
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.21"
+    id("xyz.jpenilla.run-paper") version "3.1.0"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.24"
     id("com.gradleup.shadow") version "9.0.0"
 }
 
@@ -15,12 +15,21 @@ repositories {
         name = "papermc-repo"
         url = "https://repo.papermc.io/repository/maven-public/"
     }
+
+    maven {
+        name = "protocollib-repo"
+        url = "https://repo.dmulloy2.net/repository/public/"
+    }
 }
 
 dependencies {
-    paperweight.paperDevBundle("1.21.11-R0.1-SNAPSHOT")
+    paperweight.paperDevBundle("26.3.build.218-stable")
 
-    compileOnly("net.dmulloy2:ProtocolLib:5.4.0")
+    compileOnly("net.dmulloy2:ProtocolLib:5.5.0-SNAPSHOT")
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
+    testImplementation("org.mockito:mockito-core:5.24.0")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 shadowJar {
@@ -31,7 +40,7 @@ build.dependsOn shadowJar
 
 tasks {
     runServer {
-        minecraftVersion("1.21.11")
+        minecraftVersion("26.3")
     }
 }
 
@@ -44,6 +53,10 @@ java {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release.set(targetJavaVersion)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 processResources {
